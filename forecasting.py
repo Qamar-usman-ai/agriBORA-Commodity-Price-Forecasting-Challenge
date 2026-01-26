@@ -15,8 +15,7 @@ warnings.filterwarnings("ignore")
 # ------------------------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------------------------
-DATA_PATH = "./data/"
-
+# CORRECTED PATHS - Files are in the root directory, not ./data/
 TARGET_COUNTIES = [
     "Kiambu",
     "Kirinyaga",
@@ -46,10 +45,17 @@ COUNTY_FACTORS = {
 # ------------------------------------------------------------------------------
 @st.cache_data
 def load_data():
-    agribora = pd.read_csv(f"{DATA_PATH}agriBORA_maize_prices.csv")
-    agribora_recent = pd.read_csv(
-        f"{DATA_PATH}agriBORA_maize_prices_weeks_46_to_51.csv"
-    )
+    # CORRECTED: Removed DATA_PATH and using direct file names
+    try:
+        # Try to load from the root directory
+        agribora = pd.read_csv("agriBORA_maize_prices.csv")
+        agribora_recent = pd.read_csv("agriBORA_maize_prices_weeks_46_to_51.csv")
+    except FileNotFoundError:
+        # If files are in a different location, you might need to adjust
+        st.error("Error: CSV files not found. Please ensure the following files are in the same directory:")
+        st.error("1. agriBORA_maize_prices.csv")
+        st.error("2. agriBORA_maize_prices_weeks_46_to_51.csv")
+        st.stop()
 
     agribora["Date"] = pd.to_datetime(agribora["Date"])
     agribora_recent["Date"] = pd.to_datetime(agribora_recent["Date"])
@@ -127,8 +133,22 @@ def main():
     )
 
     # Load data
-    agribora, agribora_recent = load_data()
+    with st.spinner("Loading data..."):
+        agribora, agribora_recent = load_data()
+    
+    # Show data info
+    with st.expander("📁 Data Information"):
+        st.write(f"Historical data shape: {agribora.shape}")
+        st.write(f"Recent data shape: {agribora_recent.shape}")
+        st.write("Available counties in recent data:", agribora_recent["County"].unique())
+    
     recent_prices = get_recent_prices(agribora_recent)
+    
+    # Show current prices
+    with st.expander("📈 Current Prices (Most Recent)"):
+        current_df = pd.DataFrame(list(recent_prices.items()), 
+                                 columns=["County", "Current_Price"])
+        st.dataframe(current_df)
 
     # Sidebar
     st.sidebar.header("Forecast Settings")
@@ -141,23 +161,48 @@ def main():
     st.sidebar.markdown("**Target Counties**")
     for c in TARGET_COUNTIES:
         st.sidebar.write(f"- {c}")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Seasonal Adjustments**")
+    for week, factor in SEASONAL_ADJUSTMENTS.items():
+        st.sidebar.write(f"Week {week}: {factor}x")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**County Factors**")
+    for county, factor in COUNTY_FACTORS.items():
+        st.sidebar.write(f"{county}: {factor}x")
 
     # Forecast button
-    if st.button("🔮 Generate Forecast"):
-        forecast_df = forecast_prices(
-            agribora,
-            recent_prices,
-            week_number
-        )
+    if st.button("🔮 Generate Forecast", type="primary"):
+        with st.spinner(f"Generating forecast for Week {week_number}..."):
+            forecast_df = forecast_prices(
+                agribora,
+                recent_prices,
+                week_number
+            )
 
         st.subheader(f"📊 Predicted Wholesale Prices (Week {week_number})")
         st.dataframe(forecast_df, use_container_width=True)
+        
+        # Add visualization
+        col1, col2 = st.columns(2)
+        with col1:
+            st.bar_chart(forecast_df.set_index("County")["Predicted_Wholesale_Price_KES"])
+        
+        with col2:
+            # Show percentage change
+            forecast_df["Current_Price"] = forecast_df["County"].map(recent_prices)
+            forecast_df["Change_%"] = ((forecast_df["Predicted_Wholesale_Price_KES"] - 
+                                      forecast_df["Current_Price"]) / 
+                                     forecast_df["Current_Price"] * 100).round(2)
+            st.dataframe(forecast_df[["County", "Change_%"]], use_container_width=True)
 
         st.download_button(
             label="⬇️ Download Predictions (CSV)",
             data=forecast_df.to_csv(index=False),
             file_name=f"maize_price_forecast_week_{week_number}.csv",
-            mime="text/csv"
+            mime="text/csv",
+            type="secondary"
         )
 
     # Footer
